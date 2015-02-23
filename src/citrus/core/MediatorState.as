@@ -1,5 +1,6 @@
 package citrus.core {
 
+	import citrus.physics.APhysicsEngine;
 	import citrus.datastructures.PoolObject;
 	import citrus.objects.APhysicsObject;
 	import citrus.system.Component;
@@ -22,6 +23,9 @@ package citrus.core {
 		private var _view:ACitrusView;
 		private var _istate:IState;
 
+		private var _garbage:Array = [];
+		private var _numObjects:uint = 0;
+
 		public function MediatorState(istate:IState) {
 			_istate = istate;
 		}
@@ -36,14 +40,11 @@ package citrus.core {
 
 			_poolObjects.length = 0;
 			
-			var n:uint = _objects.length;
-			for (var i:int = n - 1; i >= 0; --i) {
-				var object:CitrusObject = _objects[i];
-				object.destroy();
-
-				_view.removeArt(object);
-			}
-			_objects.length = 0;
+			_numObjects = _objects.length;
+			var co:CitrusObject;
+			while((co = _objects.pop()) != null)
+				removeImmediately(co);
+			_numObjects = _objects.length = 0;
 
 			_view.destroy();
 			
@@ -71,42 +72,30 @@ package citrus.core {
 		 */
 		public function update(timeDelta:Number):void {
 
-			// Search objects to destroy
-			var garbage:Array = [];
-			var n:uint = _objects.length;
+			_numObjects = _objects.length;
 			
 			var object:CitrusObject;
 
-			for (var i:uint = 0; i < n; ++i) {
-
-				object = _objects[i];
-
+			for (var i:uint = 0; i < _numObjects; ++i) { //run through objects from 'left' to 'right'
+			
+				object = _objects.shift(); // get first object in list
+				
 				if (object.kill)
-					garbage.push(object);
-				else if (object.updateCallEnabled)
-					object.update(timeDelta);
+					_garbage.push(object); // push object to garbage
+					
+				else {
+					_objects.push(object); // re-insert object at the end of _objects
+					
+					if (object.updateCallEnabled)
+						object.update(timeDelta);
+				}
 			}
 
 			// Destroy all objects marked for destroy
 			// TODO There might be a limit on the number of Box2D bodies that you can destroy in one tick?
-			n = garbage.length;
 			var garbageObject:CitrusObject;
-			for (i = 0; i < n; ++i) {
-				garbageObject = garbage[i];
-				_objects.splice(_objects.indexOf(garbageObject), 1);
-
-				if (garbageObject is Entity)
-				{
-					var views:Vector.<Component> = (garbageObject as Entity).lookupComponentsByType(ViewComponent);
-						if (views.length > 0)
-							for each(var view:ViewComponent in views)
-								_view.removeArt(view);
-				}
-				else
-					_view.removeArt(garbageObject);
-
-				garbageObject.destroy();
-			}
+			while((garbageObject = _garbage.shift()) != null)
+				removeImmediately(garbageObject);
 
 			for each (var poolObject:PoolObject in _poolObjects)
 				poolObject.updatePhysics(timeDelta);
@@ -132,7 +121,11 @@ package citrus.core {
 			if (object is APhysicsObject)
 				(object as APhysicsObject).addPhysics();
 			
-			_objects.push(object);
+			if(object is APhysicsEngine)
+				_objects.unshift(object);
+			else
+				_objects.push(object);
+				
 			_view.addArt(object);
 			
 			return object;
@@ -189,10 +182,30 @@ package citrus.core {
 		}
 		
 		public function removeImmediately(object:CitrusObject):void {
+			if(object == null)
+				return;
+				
+			var i:uint = _objects.indexOf(object);
+			
+			if(i < 0)
+				return;
+				
 			object.kill = true;
-			_objects.splice(_objects.indexOf(object), 1);
+			_objects.splice(i, 1);
+
+			if (object is Entity) {
+				var views:Vector.<Component> = (object as Entity).lookupComponentsByType(ViewComponent);
+				
+				if (views.length > 0)
+					for each(var view:ViewComponent in views)
+						_view.removeArt(view);
+						
+			} else
+				_view.removeArt(object);
+
 			object.destroy();
-			_view.removeArt(object);
+
+			--_numObjects;
 		}
 
 		/**
